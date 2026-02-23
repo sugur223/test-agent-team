@@ -38,6 +38,7 @@ jobs:
 
           ISSUE_BODY=$(gh issue view "$ISSUE_NUMBER" --json body -q '.body')
 
+          unset CLAUDECODE
           claude -p "
           あなたはこのリポジトリの開発者です。
           以下のGitHub Issueの内容に従ってコードを実装してください。

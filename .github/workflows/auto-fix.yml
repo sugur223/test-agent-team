@@ -66,6 +66,7 @@ jobs:
         run: |
           REVIEW_BODY="${{ github.event.review.body }}"
 
+          unset CLAUDECODE
           claude -p "
           あなたはこのリポジトリの開発者です。
           ${REVIEWER} さんからコードレビューで以下の指摘を受けました。
@@ -138,6 +139,7 @@ jobs:
           PR_COMMENTS=$(gh pr view ${{ steps.pr.outputs.number }} \
             --json comments --jq '.comments[-3:][].body' 2>/dev/null || echo "")
 
+          unset CLAUDECODE
           claude -p "
           あなたはこのリポジトリの開発者です。
           ${COMMENTER} さんからPRに以下のコメントが来ました。
