@@ -21,6 +21,9 @@ jobs:
           git config user.name "auto-dev[bot]"
           git config user.email "auto-dev@users.noreply.github.com"
 
+      - name: Setup env
+        run: cp .env.example .env
+
       - name: Ensure Docker is running
         run: docker compose up -d
 
