@@ -1,0 +1,36 @@
+name: "📢 Notify: Approved"
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  notify:
+    if: |
+      github.event.review.state == 'approved' &&
+      contains(github.event.pull_request.labels.*.name, 'auto-dev')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Comment on PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --body "✅ **自動レビュー完了・承認済み**
+
+          @${{ github.event.pull_request.user.login }} マージ可能です。確認してマージしてください。
+
+          ---
+          🤖 自動開発パイプライン by Claude Code × Codex"
+
+      - name: Notify via Slack
+        if: ${{ secrets.SLACK_WEBHOOK != '' }}
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        run: |
+          curl -s -X POST "$SLACK_WEBHOOK" \
+            -H 'Content-Type: application/json' \
+            -d "{
+              \"text\": \"✅ 自動実装PRが承認されました\n*${{ github.event.pull_request.title }}*\n${{ github.event.pull_request.html_url }}\"
+            }"

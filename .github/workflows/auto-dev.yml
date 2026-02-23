@@ -1,0 +1,95 @@
+name: "🤖 Auto Dev: Claude Code"
+
+on:
+  issues:
+    types: [opened, labeled]
+
+jobs:
+  develop:
+    if: contains(github.event.issue.labels.*.name, 'auto-dev')
+    runs-on: [self-hosted, auto-dev]
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Git
+        run: |
+          git config user.name "auto-dev[bot]"
+          git config user.email "auto-dev@users.noreply.github.com"
+
+      - name: Ensure Docker is running
+        run: docker compose up -d
+
+      - name: Create branch and implement
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+        run: |
+          BRANCH="auto/issue-${ISSUE_NUMBER}"
+          git checkout -b "$BRANCH"
+
+          ISSUE_BODY=$(gh issue view "$ISSUE_NUMBER" --json body -q '.body')
+
+          claude -p "
+          あなたはこのリポジトリの開発者です。
+          以下のGitHub Issueの内容に従ってコードを実装してください。
+          CLAUDE.md のルールに必ず従ってください。
+
+          【重要】
+          - Docker 開発環境が起動済みです
+          - テスト・リント・動作確認は必ず Docker コンテナ内で実行してください
+            例: docker compose exec app <コマンド> または make test / make lint
+          - 新しい依存パッケージを追加した場合は Dockerfile も更新してください
+          - DB スキーマ変更がある場合はマイグレーションファイルを作成してください
+
+          ## Issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}
+
+          ${ISSUE_BODY}
+
+          実装が完了したら、変更内容の概要を教えてください。
+          " --allowedTools "Bash,Read,Write,Edit"
+
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A
+            git commit -m "feat: implement issue #${ISSUE_NUMBER}
+
+          ${ISSUE_TITLE}"
+            git push origin "$BRANCH"
+          else
+            echo "変更なし。終了します。"
+            exit 0
+          fi
+
+      - name: Create PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+        run: |
+          gh pr create \
+            --title "🤖 Auto: ${ISSUE_TITLE}" \
+            --body "## 自動実装 PR
+
+          Closes #${ISSUE_NUMBER}
+
+          Claude Code (Max) による自動実装です。
+          Codex (Pro) による自動レビューが開始されます。
+
+          ---
+          ⚠️ 最終マージは手動で行ってください。" \
+            --base main \
+            --head "auto/issue-${ISSUE_NUMBER}" \
+            --label "auto-dev"
+
+      - name: Update Issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue edit ${{ github.event.issue.number }} \
+            --add-label "in-progress" \
+            --remove-label "auto-dev"

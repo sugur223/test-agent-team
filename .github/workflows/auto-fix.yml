@@ -1,0 +1,153 @@
+name: "🔧 Auto Fix: Claude Code"
+
+on:
+  pull_request_review:
+    types: [submitted]
+  issue_comment:
+    types: [created]
+
+jobs:
+  fix-on-review:
+    if: |
+      github.event_name == 'pull_request_review' &&
+      github.event.review.state == 'changes_requested' &&
+      contains(github.event.pull_request.labels.*.name, 'auto-dev') &&
+      github.event.review.user.login != 'github-actions[bot]'
+    runs-on: [self-hosted, auto-dev]
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Git
+        run: |
+          git config user.name "auto-dev[bot]"
+          git config user.email "auto-dev@users.noreply.github.com"
+
+      - name: Ensure Docker is running
+        run: docker compose up -d
+
+      - name: Check iteration count
+        id: count
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          COUNT=$(gh pr view ${{ github.event.pull_request.number }} \
+            --json reviews \
+            --jq '[.reviews[] | select(.state == "CHANGES_REQUESTED")] | length')
+          echo "iteration=$COUNT" >> $GITHUB_OUTPUT
+          if [ "$COUNT" -gt 5 ]; then
+            echo "too_many=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Escalate if too many iterations
+        if: steps.count.outputs.too_many == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --body "⚠️ **自動修正が5回を超えました。** 手動対応してください。
+          @${{ github.event.pull_request.user.login }}"
+          gh pr edit ${{ github.event.pull_request.number }} --add-label "needs-human"
+          exit 0
+
+      - name: Fix with Claude Code
+        if: steps.count.outputs.too_many != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REVIEWER: ${{ github.event.review.user.login }}
+        run: |
+          REVIEW_BODY="${{ github.event.review.body }}"
+
+          claude -p "
+          あなたはこのリポジトリの開発者です。
+          ${REVIEWER} さんからコードレビューで以下の指摘を受けました。
+          指摘に対応してコードを修正してください。
+          CLAUDE.md のルールに必ず従ってください。
+          テスト・動作確認は Docker コンテナ内で実行してください。
+
+          ## レビュー指摘内容:
+          ${REVIEW_BODY}
+          " --allowedTools "Bash,Read,Write,Edit"
+
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A
+            git commit -m "fix: address review by ${REVIEWER} (iteration ${{ steps.count.outputs.iteration }})"
+            git push
+          fi
+
+  fix-on-comment:
+    if: |
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      contains(github.event.issue.labels.*.name, 'auto-dev') &&
+      !contains(github.event.comment.user.login, '[bot]') &&
+      startsWith(github.event.comment.body, '/fix')
+    runs-on: [self-hosted, auto-dev]
+    timeout-minutes: 30
+
+    steps:
+      - name: Get PR info
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER=${{ github.event.issue.number }}
+          HEAD_REF=$(gh pr view "$PR_NUMBER" --json headRefName -q '.headRefName')
+          echo "number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "head_ref=$HEAD_REF" >> $GITHUB_OUTPUT
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.head_ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Git
+        run: |
+          git config user.name "auto-dev[bot]"
+          git config user.email "auto-dev@users.noreply.github.com"
+
+      - name: Ensure Docker is running
+        run: docker compose up -d
+
+      - name: Acknowledge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment ${{ steps.pr.outputs.number }} \
+            --body "👀 コメントを確認しました。修正を開始します..."
+
+      - name: Fix with Claude Code
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENTER: ${{ github.event.comment.user.login }}
+        run: |
+          COMMENT_BODY=$(echo "${{ github.event.comment.body }}" | sed 's|^/fix\s*||')
+
+          PR_COMMENTS=$(gh pr view ${{ steps.pr.outputs.number }} \
+            --json comments --jq '.comments[-3:][].body' 2>/dev/null || echo "")
+
+          claude -p "
+          あなたはこのリポジトリの開発者です。
+          ${COMMENTER} さんからPRに以下のコメントが来ました。
+          コメントの内容に従ってコードを修正してください。
+          CLAUDE.md のルールに必ず従ってください。
+          テスト・動作確認は Docker コンテナ内で実行してください。
+
+          ## コメント:
+          ${COMMENT_BODY}
+
+          ## 直近のPRコメント（参考）:
+          ${PR_COMMENTS}
+          " --allowedTools "Bash,Read,Write,Edit"
+
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A
+            git commit -m "fix: address comment by ${COMMENTER}"
+            git push
+          fi

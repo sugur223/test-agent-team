@@ -1,0 +1,67 @@
+name: "🔍 Auto Review: Codex"
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    if: contains(github.event.pull_request.labels.*.name, 'auto-dev')
+    runs-on: [self-hosted, auto-dev]
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get diff
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr diff ${{ github.event.pull_request.number }} > /tmp/pr_diff.patch
+
+      - name: Review with Codex
+        run: |
+          REVIEW_RESULT=$(codex -p "
+          あなたはシニアエンジニアとしてコードレビューを行います。
+
+          以下の観点でレビューしてください:
+          1. バグや論理エラーがないか
+          2. セキュリティ上の問題がないか
+          3. パフォーマンスの問題がないか
+          4. コードの可読性・保守性
+          5. テストが適切に書かれているか
+          6. Dockerfile / docker-compose.yml の変更がある場合、セキュリティ・効率性
+
+          【重要】レスポンスのフォーマット:
+          - 1行目に判定結果を記載: APPROVE または CHANGES_REQUESTED
+          - 2行目以降にレビューコメント
+
+          問題がなければ APPROVE としてください。
+          軽微な改善提案だけの場合も APPROVE としてください。
+          バグ・セキュリティ問題・重大な設計問題がある場合のみ CHANGES_REQUESTED としてください。
+
+          --- diff ---
+          $(cat /tmp/pr_diff.patch)
+          " --approval-mode full-auto)
+
+          echo "$REVIEW_RESULT" > /tmp/review_result.txt
+
+      - name: Submit review
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FIRST_LINE=$(head -1 /tmp/review_result.txt)
+          BODY=$(tail -n +2 /tmp/review_result.txt)
+          FULL_BODY="🔍 **Codex Auto Review**
+
+          ${BODY}"
+
+          if echo "$FIRST_LINE" | grep -qi "APPROVE"; then
+            gh pr review ${{ github.event.pull_request.number }} \
+              --approve --body "$FULL_BODY"
+          else
+            gh pr review ${{ github.event.pull_request.number }} \
+              --request-changes --body "$FULL_BODY"
+          fi
